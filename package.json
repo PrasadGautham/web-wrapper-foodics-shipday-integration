@@ -1,0 +1,22 @@
+{
+  "name": "foodics-shipday-webhook",
+  "version": "1.0.0",
+  "description": "Foodics webhook integration that forwards delivery orders to Shipday",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "axios": "^1.8.2",
+    "body-parser": "^1.20.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pino": "^9.6.0",
+    "pino-http": "^10.4.0"
+  }
+}
