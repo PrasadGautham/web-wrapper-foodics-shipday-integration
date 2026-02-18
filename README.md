@@ -5,6 +5,7 @@ Production-ready Node.js integration that:
 - Verifies Foodics webhook HMAC signatures
 - Processes supported order events
 - Forwards delivery orders to Shipday `POST /orders`
+- Marks Shipday orders as ready-for-pickup based on Foodics update events (no DB required)
 - Uses Foodics OAuth token flow with in-memory token cache/refresh
 - Uses structured logging with Winston + daily rotation
 - Retries Shipday failures with exponential backoff
@@ -73,6 +74,8 @@ Routes:
 
 `src/shipdayClient.js` calls:
 - `POST https://api.shipday.com/orders`
+- `GET https://api.shipday.com/orders/{orderNumber}` (resolve Shipday order ID without DB)
+- `PUT https://api.shipday.com/orders/{orderId}/meta` (ready-for-pickup transition)
 
 Auth:
 - `Authorization: Basic <SHIPDAY_API_KEY>`
@@ -83,6 +86,18 @@ Retry policy:
   - `SHIPDAY_MAX_RETRIES`
   - `SHIPDAY_RETRY_BASE_DELAY_MS`
   - `SHIPDAY_RETRY_MAX_DELAY_MS`
+
+### Ready-for-pickup flow (no DB)
+
+When Foodics sends `order.updated` or `order.delivery.updated`, the server checks ready markers:
+- `delivery_status` indicates ready (`2`, `ready`, `ready_for_pickup`, `pickup_ready`)
+- or kitchen completion fields are present (e.g., `kitchen_done_at`)
+
+If ready is detected:
+1. Resolve Shipday order using `orderNumber` (same value used on insert: `order.reference || order.id`)
+2. Call Shipday ready endpoint using returned Shipday `orderId`
+
+To reduce duplicate transitions from repeated webhook updates, the app applies in-memory suppression for repeated ready events within a short window.
 
 ## 8. Logging
 

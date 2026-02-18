@@ -106,6 +106,76 @@
         "description": "Sends a Foodics-style webhook payload to local integration."
       },
       "response": []
+    },
+    {
+      "name": "Foodics Webhook - order.delivery.updated (Ready for Pickup)",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const secret = pm.environment.get(\"FOODICS_WEBHOOK_SECRET\");",
+              "if (!secret) {",
+              "  throw new Error(\"Missing FOODICS_WEBHOOK_SECRET in Postman environment\");",
+              "}",
+              "",
+              "const raw = pm.request.body && pm.request.body.raw ? pm.request.body.raw : \"\";",
+              "const resolvedBody = pm.variables.replaceIn(raw);",
+              "const signature = CryptoJS.HmacSHA256(resolvedBody, secret).toString(CryptoJS.enc.Hex);",
+              "",
+              "pm.request.headers.upsert({ key: \"x-foodics-signature\", value: signature });",
+              "console.log(\"Generated x-foodics-signature:\", signature);"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 200\", function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test(\"Webhook ack acknowledged=true\", function () {",
+              "  const json = pm.response.json();",
+              "  pm.expect(json.acknowledged).to.eql(true);",
+              "});",
+              "",
+              "pm.test(\"Webhook ack contains updated event\", function () {",
+              "  const json = pm.response.json();",
+              "  pm.expect(json.event).to.eql(\"order.delivery.updated\");",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "x-foodics-signature",
+            "value": "",
+            "description": "Auto-populated by pre-request script"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"timestamp\": 1700000200,\n  \"event\": \"order.delivery.updated\",\n  \"business\": {\n    \"name\": \"Demo Restaurant\",\n    \"reference\": 154543,\n    \"latitude\": 24.7136,\n    \"longitude\": 46.6753\n  },\n  \"order\": {\n    \"id\": \"ord_123\",\n    \"reference\": \"10001\",\n    \"type\": 3,\n    \"delivery_status\": 2,\n    \"status\": \"ready\",\n    \"kitchen_done_at\": \"2026-02-18T18:50:00.000Z\",\n    \"total_price\": 79.5,\n    \"tax\": 5,\n    \"delivery_fees\": 8,\n    \"branch\": {\n      \"name\": \"Main Branch\",\n      \"latitude\": 24.7136,\n      \"longitude\": 46.6753\n    },\n    \"customer\": {\n      \"name\": \"John Doe\",\n      \"phone\": \"15550001111\"\n    },\n    \"customer_address\": {\n      \"description\": \"123 Main St\",\n      \"latitude\": 24.7743,\n      \"longitude\": 46.7386\n    },\n    \"products\": [\n      {\n        \"name\": \"Burger\",\n        \"quantity\": 2,\n        \"price\": 20\n      }\n    ]\n  }\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/webhooks/foodics",
+          "host": ["{{baseUrl}}"],
+          "path": ["webhooks", "foodics"]
+        },
+        "description": "Simulates Foodics delivery update where order is ready for pickup."
+      },
+      "response": []
     }
   ]
 }
