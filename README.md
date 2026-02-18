@@ -1,19 +1,20 @@
 # Foodics -> Shipday Webhook Integration
 
-Production-oriented Node.js integration that:
+Production-ready Node.js integration that:
 - Receives Foodics webhook events with Express + `body-parser`
-- Verifies webhook signatures with HMAC
-- Handles supported order events
-- Uses Foodics OAuth token flow and caches auth token in-memory
-- Sends delivery orders to Shipday `POST /orders`
-- Logs structured request/response events with Pino
-- Retries Shipday calls with exponential backoff
+- Verifies Foodics webhook HMAC signatures
+- Processes supported order events
+- Forwards delivery orders to Shipday `POST /orders`
+- Uses Foodics OAuth token flow with in-memory token cache/refresh
+- Uses structured logging with Winston + daily rotation
+- Retries Shipday failures with exponential backoff
 
 ## 1. Prerequisites
 
 - Node.js 18+
-- Foodics app credentials and webhook secret
+- Foodics webhook secret
 - Shipday API key
+- (Optional) Foodics OAuth credentials if webhook payload does not include full order details
 
 ## 2. Install
 
@@ -23,16 +24,24 @@ npm install
 
 ## 3. Configure environment
 
-Copy `.env.example` to `.env` and fill all required values:
+Copy `.env.example` to `.env` and fill required values:
 
 ```bash
 cp .env.example .env
 ```
 
-Important variables:
-- `FOODICS_WEBHOOK_SECRET`: shared secret for signature validation
-- `FOODICS_CLIENT_ID`, `FOODICS_CLIENT_SECRET`, `FOODICS_REDIRECT_URI`, `FOODICS_AUTHORIZATION_CODE`: OAuth bootstrap inputs
-- `SHIPDAY_API_KEY`: Shipday API key
+Required:
+- `FOODICS_WEBHOOK_SECRET`
+- `SHIPDAY_API_KEY`
+
+Optional Foodics OAuth (used when order lookup is needed):
+- `FOODICS_CLIENT_ID`
+- `FOODICS_CLIENT_SECRET`
+- `FOODICS_REDIRECT_URI`
+- `FOODICS_AUTHORIZATION_CODE`
+- `FOODICS_REFRESH_TOKEN`
+- `FOODICS_ACCESS_TOKEN`
+- `FOODICS_ACCESS_TOKEN_EXPIRES_AT`
 
 ## 4. Run server
 
@@ -40,84 +49,65 @@ Important variables:
 npm start
 ```
 
-Server routes:
+Routes:
 - `GET /health`
 - `POST /webhooks/foodics`
 
-## 5. Foodics auth behavior
+## 5. Foodics webhook validation
 
-`src/foodicsClient.js` uses OAuth token endpoint (`/oauth/token`) and supports:
-- `refresh_token` grant (if refresh token is present)
-- fallback to `authorization_code` grant
+`src/middleware/webhookValidator.js`:
+- validates HMAC on raw request body
+- uses `FOODICS_WEBHOOK_SECRET`
+- header defaults to `x-foodics-signature` (configurable by `FOODICS_WEBHOOK_SIGNATURE_HEADER`)
+- hash algo defaults to `sha256` (configurable by `FOODICS_WEBHOOK_HASH_ALGO`)
 
-Token cache is in-memory:
-- `accessToken`
-- `refreshToken`
-- `expiresAt` (auto refresh before expiry)
+## 6. Foodics auth behavior
 
-## 6. Webhook signature validation
+`src/foodicsClient.js`:
+- uses `/oauth/token`
+- refresh flow first (`refresh_token`)
+- fallback to `authorization_code`
+- caches access token, refresh token, and expiration in memory
 
-`src/middleware/webhookValidator.js` validates HMAC using raw body bytes and shared secret.
-
-Header defaults to `x-foodics-signature` and can be changed by:
-- `FOODICS_WEBHOOK_SIGNATURE_HEADER`
-
-Algorithm defaults to `sha256` and can be changed by:
-- `FOODICS_WEBHOOK_HASH_ALGO`
-
-The middleware accepts either hex or base64 signature formats.
-
-## 7. Shipday forwarding and retries
+## 7. Shipday forwarding
 
 `src/shipdayClient.js` calls:
 - `POST https://api.shipday.com/orders`
 
-Headers:
-- `x-api-key: <SHIPDAY_API_KEY>`
+Auth:
+- `Authorization: Basic <SHIPDAY_API_KEY>`
 
 Retry policy:
-- Exponential backoff for network errors, `429`, and `5xx`
-- Controlled by:
+- retries network errors, `429`, and `5xx`
+- exponential backoff controlled by:
   - `SHIPDAY_MAX_RETRIES`
   - `SHIPDAY_RETRY_BASE_DELAY_MS`
   - `SHIPDAY_RETRY_MAX_DELAY_MS`
 
-## 8. Example webhook test (local)
+## 8. Logging
 
-Example payload:
+`src/logger.js` uses Winston + `winston-daily-rotate-file`:
+- JSON file logs
+- daily rotate: `logs/app-YYYY-MM-DD.log`
+- gzip compression enabled
+- retention: 14 days
+- automatic old log cleanup
 
-```json
-{
-  "timestamp": 1700000000,
-  "event": "order.delivery.created",
-  "business": { "name": "Demo Restaurant", "reference": 12345 },
-  "order": {
-    "id": "ord_123",
-    "reference": "10001",
-    "type": 3,
-    "total_price": 79.5,
-    "tax": 5,
-    "delivery_fees": 8,
-    "branch": { "name": "Main Branch" },
-    "customer": { "name": "John Doe", "phone": "15550001111" },
-    "customer_address": { "description": "123 Main St" },
-    "products": [{ "name": "Burger", "quantity": 2, "price": 20 }]
-  }
-}
-```
+Request context:
+- `src/middleware/requestContext.js` generates UUID `requestId` per request
+- `requestId` is attached to all request-scoped logs
 
-Generate signature (PowerShell):
+Dev vs prod:
+- `NODE_ENV=development`: file logs + readable console logs
+- `NODE_ENV=production`: file logs only
 
-```powershell
-$secret = "YOUR_WEBHOOK_SECRET"
-$body = Get-Content .\payload.json -Raw
-$hmac = New-Object System.Security.Cryptography.HMACSHA256
-$hmac.Key = [Text.Encoding]::UTF8.GetBytes($secret)
-$signature = [BitConverter]::ToString($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($body))).Replace("-", "").ToLower()
-Write-Output $signature
-```
+## 9. Local webhook test
 
-Send webhook:
+Use included Postman assets:
+- `postman/Foodics-Shipday-Webhook.postman_collection.json`
+- `postman/Foodics-Local.postman_environment.json`
+
+Or use curl:
 
 ```bash
 curl -X POST http://localhost:3000/webhooks/foodics \
@@ -126,17 +116,18 @@ curl -X POST http://localhost:3000/webhooks/foodics \
   --data @payload.json
 ```
 
-Expected ack response:
+Expected ack:
 
 ```json
 { "acknowledged": true, "event": "order.delivery.created" }
 ```
 
-## 9. Project structure
+## 10. Project structure
 
-- `src/index.js`: webhook server and event pipeline
+- `src/index.js`: server and webhook pipeline
 - `src/config.js`: env parsing and validation
-- `src/logger.js`: structured logger and HTTP logging middleware
-- `src/foodicsClient.js`: Foodics OAuth token + API client
-- `src/shipdayClient.js`: Shipday API client with retries
-- `src/middleware/webhookValidator.js`: HMAC validation
+- `src/logger.js`: Winston logging configuration + rotation
+- `src/foodicsClient.js`: Foodics OAuth + API client
+- `src/shipdayClient.js`: Shipday API client + retries
+- `src/middleware/requestContext.js`: per-request UUID logger context
+- `src/middleware/webhookValidator.js`: Foodics signature validation
