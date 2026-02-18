@@ -1,6 +1,8 @@
 import axios from "axios";
 import config from "./config.js";
-import logger from "./logger.js";
+import { getLogger } from "./logger.js";
+
+const logger = getLogger("foodicsClient");
 
 class FoodicsClient {
   constructor() {
@@ -68,16 +70,15 @@ class FoodicsClient {
         );
 
         this.updateTokenCache(response.data);
-        logger.info("Foodics access token refreshed successfully");
+        logger.info("Foodics access token refreshed successfully", {
+          externalStatusCode: response.status
+        });
         return;
       } catch (error) {
-        logger.warn(
-          {
-            err: error.message,
-            status: error.response?.status
-          },
-          "Foodics refresh token flow failed, attempting authorization_code flow"
-        );
+        logger.warn("Foodics refresh token flow failed, attempting authorization_code flow", {
+          externalStatusCode: error.response?.status,
+          error
+        });
       }
     }
 
@@ -113,7 +114,9 @@ class FoodicsClient {
     );
 
     this.updateTokenCache(response.data);
-    logger.info("Foodics access token obtained using authorization_code flow");
+    logger.info("Foodics access token obtained using authorization_code flow", {
+      externalStatusCode: response.status
+    });
   }
 
   updateTokenCache(tokenPayload) {
@@ -127,7 +130,7 @@ class FoodicsClient {
     }
   }
 
-  async getOrderById(orderId) {
+  async getOrderById(orderId, requestLog) {
     if (!orderId) {
       throw new Error("orderId is required to fetch order from Foodics API");
     }
@@ -137,6 +140,12 @@ class FoodicsClient {
       headers: {
         Authorization: `Bearer ${accessToken}`
       }
+    });
+
+    const activeLog = requestLog || logger;
+    activeLog.info("Fetched order details from Foodics API", {
+      orderId,
+      externalStatusCode: response.status
     });
 
     return response.data?.data ?? response.data;

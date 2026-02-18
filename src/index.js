@@ -2,12 +2,15 @@ import express from "express";
 import bodyParser from "body-parser";
 
 import config from "./config.js";
-import logger, { httpLogger } from "./logger.js";
+import { getLogger } from "./logger.js";
 import foodicsClient from "./foodicsClient.js";
 import shipdayClient from "./shipdayClient.js";
 import validateFoodicsWebhookSignature from "./middleware/webhookValidator.js";
+import attachRequestContext from "./middleware/requestContext.js";
 
 const app = express();
+const logger = getLogger("server");
+const supportedEvents = new Set(config.forwardEvents);
 
 app.use(
   bodyParser.json({
@@ -16,45 +19,53 @@ app.use(
     }
   })
 );
-app.use(httpLogger);
-
-const supportedEvents = new Set(config.forwardEvents);
+app.use(attachRequestContext);
 
 app.get("/health", (_req, res) => {
   res.status(200).json({ ok: true });
 });
 
-app.post(
-  "/webhooks/foodics",
-  validateFoodicsWebhookSignature,
-  async (req, res) => {
-    const event = req.body?.event;
+app.post("/webhooks/foodics", validateFoodicsWebhookSignature, async (req, res) => {
+  const event = req.body?.event;
+  req.log.info("Incoming Foodics webhook event", {
+    payload: sanitizeWebhookPayload(req.body)
+  });
 
-    if (!event) {
-      req.log.warn({ body: req.body }, "Webhook payload missing event");
-      return res.status(400).json({ acknowledged: false, error: "Missing event" });
-    }
-
-    res.status(200).json({ acknowledged: true, event });
-
-    processWebhookEvent(req.body, req.log).catch((error) => {
-      req.log.error(
-        {
-          err: error.message,
-          stack: error.stack,
-          event,
-          orderId: req.body?.order?.id
-        },
-        "Failed to process Foodics webhook event"
-      );
+  if (!event) {
+    req.log.warn("Webhook payload missing event", {
+      payload: sanitizeWebhookPayload(req.body)
     });
+    return res.status(400).json({ acknowledged: false, error: "Missing event" });
   }
-);
+
+  res.status(200).json({ acknowledged: true, event });
+
+  processWebhookEvent(req.body, req.log, req.requestId).catch((error) => {
+    req.log.error("Failed to process Foodics webhook event", {
+      event,
+      orderId: req.body?.order?.id,
+      error
+    });
+  });
+});
 
 app.use((err, req, res, _next) => {
-  req.log?.error({ err: err.message, stack: err.stack }, "Unhandled server error");
+  const requestLogger = req?.log || logger.child({ requestId: "system" });
+  requestLogger.error("Unhandled server error", { error: err });
   res.status(500).json({ acknowledged: false, error: "Internal server error" });
 });
+
+function sanitizeWebhookPayload(payload) {
+  return {
+    event: payload?.event,
+    timestamp: payload?.timestamp,
+    businessReference: payload?.business?.reference,
+    orderId: payload?.order?.id ?? payload?.order_id ?? payload?.data?.order_id ?? null,
+    orderReference: payload?.order?.reference ?? null,
+    orderType: payload?.order?.type ?? null,
+    hasCustomerAddress: Boolean(payload?.order?.customer_address)
+  };
+}
 
 function isDeliveryOrder(order, eventName) {
   if (!order) return false;
@@ -78,8 +89,8 @@ async function resolveOrder(payload, log) {
     throw new Error("Cannot resolve Foodics order ID from webhook payload");
   }
 
-  log.info({ orderId }, "Order object missing in webhook payload, fetching from Foodics API");
-  return foodicsClient.getOrderById(orderId);
+  log.info("Order object missing in webhook payload, fetching from Foodics API", { orderId });
+  return foodicsClient.getOrderById(orderId, log);
 }
 
 function toShipdayOrderPayload(order, payload) {
@@ -118,16 +129,10 @@ function toShipdayOrderPayload(order, payload) {
     : [];
 
   const customerName =
-    order.customer?.name ||
-    order.customer_name ||
-    order.customer_address?.name ||
-    "Foodics Customer";
+    order.customer?.name || order.customer_name || order.customer_address?.name || "Foodics Customer";
 
   const customerPhone =
-    order.customer?.phone ||
-    order.customer_phone ||
-    order.customer_address?.phone ||
-    "";
+    order.customer?.phone || order.customer_phone || order.customer_address?.phone || "";
 
   const deliveryAddress =
     order.customer_address?.description ||
@@ -204,21 +209,21 @@ function toShipdayOrderPayload(order, payload) {
   return shipdayPayload;
 }
 
-async function processWebhookEvent(payload, log) {
+async function processWebhookEvent(payload, log, requestId) {
   const event = payload.event;
 
   if (!supportedEvents.has(event)) {
-    log.info({ event }, "Webhook event ignored; not configured for forwarding");
+    log.info("Webhook event ignored; not configured for forwarding", { event });
     return;
   }
 
   const order = await resolveOrder(payload, log);
 
   if (!isDeliveryOrder(order, event)) {
-    log.info(
-      { event, orderId: order.id },
-      "Order is not marked as delivery. Skipping Shipday forwarding"
-    );
+    log.info("Order is not marked as delivery. Skipping Shipday forwarding", {
+      event,
+      orderId: order.id
+    });
     return;
   }
 
@@ -226,19 +231,17 @@ async function processWebhookEvent(payload, log) {
 
   await shipdayClient.insertDeliveryOrder(shipdayPayload, {
     orderId: order.id,
-    idempotencyKey: `${event}:${order.id}`
+    idempotencyKey: `${event}:${order.id}`,
+    requestId
   });
 
-  log.info(
-    {
-      event,
-      orderId: order.id,
-      orderReference: order.reference
-    },
-    "Delivery order forwarded to Shipday"
-  );
+  log.info("Delivery order forwarded to Shipday", {
+    event,
+    orderId: order.id,
+    orderReference: order.reference
+  });
 }
 
 app.listen(config.port, () => {
-  logger.info({ port: config.port }, "Foodics webhook server started");
+  logger.info("Foodics webhook server started", { port: config.port });
 });
