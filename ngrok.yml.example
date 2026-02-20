@@ -1,0 +1,8 @@
+version: "2"
+authtoken: REPLACE_WITH_YOUR_NGROK_AUTHTOKEN
+
+tunnels:
+  foodics-webhook:
+    proto: http
+    addr: 3000
+    inspect: true

@@ -4,6 +4,8 @@ node_modules/
 .env
 .env.*
 !.env.example
+ngrok.yml
+!ngrok.yml.example
 
 # Logs
 logs/

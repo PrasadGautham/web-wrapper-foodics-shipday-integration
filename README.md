@@ -131,3 +131,72 @@ Expected ack:
 - `src/shipdayClient.js`: Shipday API client + retries
 - `src/middleware/requestContext.js`: per-request UUID logger context
 - `src/middleware/webhookValidator.js`: Foodics signature validation
+
+## 11. Testing with ngrok (real webhook callbacks)
+
+Yes, ngrok free tier can be used for webhook testing.
+
+### A. Install ngrok
+
+On Windows (recommended):
+
+```powershell
+winget install --id Ngrok.Ngrok -e
+```
+
+Verify:
+
+```powershell
+ngrok version
+```
+
+### B. Configure ngrok auth token
+
+1. Create/login account at `https://dashboard.ngrok.com/`
+2. Copy your authtoken
+3. Run:
+
+```powershell
+ngrok config add-authtoken <YOUR_NGROK_AUTHTOKEN>
+```
+
+### C. Run your app and tunnel
+
+Terminal 1:
+
+```powershell
+npm run start:server
+```
+
+Terminal 2:
+
+```powershell
+npm run start:tunnel
+```
+
+Alternative if ngrok is not globally installed:
+
+```powershell
+npm run start:tunnel:npx
+```
+
+ngrok will print a public HTTPS URL like:
+
+`https://abcd-1234.ngrok-free.app`
+
+### D. Configure Foodics webhook URL
+
+Set webhook endpoint in Foodics to:
+
+`https://abcd-1234.ngrok-free.app/webhooks/foodics`
+
+### E. Validate
+
+1. Send/create/update an order in Foodics
+2. Confirm local app logs incoming webhook + ack
+3. Confirm Shipday forwarding logs
+
+Notes:
+- Postman pre-request signature script is only for local simulation.
+- Real Foodics webhooks provide their own signature header.
+- If ngrok URL changes (free tier), update webhook URL in Foodics.
